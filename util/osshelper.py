@@ -1,91 +1,72 @@
 import os
-from oss2 import SizedFileAdapter, determine_part_size
-from oss2.models import PartInfo
-import oss2
-import sys
+import boto3
+from botocore.exceptions import NoCredentialsError
 
+# s3实现
 class OssHelper:
 
-    def __init__(self,keyid,keysecret,url,bucket):
-        self.auth = oss2.Auth(keyid, keysecret)
-        self.bucket = oss2.Bucket(self.auth, url, bucket)
+    def __init__(self, access_key, secret_key, endpoint_url,bucket_name, region='cn-north-1',):
+        self.s3 = boto3.client('s3',
+                                aws_access_key_id=access_key,
+                                aws_secret_access_key=secret_key,
+                                region_name=region,
+                               endpoint_url=endpoint_url
+                               )
+        self.bucket_name = bucket_name
 
-    def get_file_list(self,dir = ''):
+    def get_file_list(self, prefix=''):
         result = []
-        ossObjects = oss2.ObjectIterator(self.bucket,prefix=dir)
-        for ossObject in ossObjects:
-            result.append({
-                "name":os.path.basename(ossObject.key),
-                "size":ossObject.size,
-                "type":"oss"
-            })
+        response = self.s3.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                result.append({
+                    "name": os.path.basename(obj['Key']),
+                    "size": obj['Size'],
+                    "type": "s3"
+                })
         return result
-        # return [ for b in oss2.ObjectIterator(self.bucket,prefix=dir)]
 
-    def upload(self,upload_path,filepath):
+    def upload(self, upload_path, file_path):
         """
-        upload_path 文件上传后的完整路径包括本身
-        filepath 本地文件路径
+        upload_path: 文件上传后的完整路径，包括本身
+        file_path: 本地文件路径
         """
-        key = upload_path
-        filename = filepath
+        try:
+            self.s3.upload_file(file_path, self.bucket_name, upload_path)
+            print(f"上传成功: {file_path} 到 {upload_path}")
+        except FileNotFoundError:
+            print(f"文件未找到: {file_path}")
+        except NoCredentialsError:
+            print("凭证错误")
 
-        total_size = os.path.getsize(filename)
-        # determine_part_size方法用来确定分片大小。
-        part_size = determine_part_size(total_size, preferred_size=10 * 1024 * 1024)
-
-        # 初始化分片。
-        upload_id = self.bucket.init_multipart_upload(key).upload_id
-        parts = []
-
-        # 逐个上传分片。
-        with open(filename, 'rb') as fileobj:
-            part_number = 1
-            offset = 0
-            while offset < total_size:
-                num_to_upload = min(part_size, total_size - offset)
-                # SizedFileAdapter(fileobj, size)方法会生成一个新的文件对象，重新计算起始追加位置。
-                result = self.bucket.upload_part(key, upload_id, part_number,
-                                            SizedFileAdapter(fileobj, num_to_upload))
-                parts.append(PartInfo(part_number, result.etag))
-
-                offset += num_to_upload
-                part_number += 1
-
-        # 完成分片上传。
-        self.bucket.complete_multipart_upload(key, upload_id, parts)
-
-        ## 验证分片上传。
-        #with open(filename, 'rb') as fileobj:
-        #    if not self.bucket.get_object(key).read() == fileobj.read():
-        #        msg='上传' + filename + '出错，验证分片失败'
-        #        print(msg)
-        #        LogHelper.info(msg)
-
-
-    def delete(self,obj_name):
-        self.bucket.delete_object(obj_name)
+    def delete(self, obj_name):
+        self.s3.delete_object(Bucket=self.bucket_name, Key=obj_name)
 
     def percentage(self, consumed_bytes, total_bytes):
-        """进度条回调函数，计算当前完成的百分比
-
-        :param consumed_bytes: 已经上传/下载的数据量
-        :param total_bytes: 总数据量
-        """
+        """进度条回调函数，计算当前完成的百分比"""
         if total_bytes:
             rate = int(100 * (float(consumed_bytes) / float(total_bytes)))
-            print('\r{0}% '.format(rate))
-            sys.stdout.flush()
+            print('\r{0}% '.format(rate), end='')
 
-    def download(self, ossObject, loaclFile):
-        oss2.resumable_download(self.bucket, ossObject, loaclFile,
-                                store=oss2.ResumableDownloadStore(root=os.path.dirname(loaclFile)),
-                                multiget_threshold=1 * 1024,
-                                part_size=10 * 1024 * 1024,
-                                num_threads=3,
-                                progress_callback= self.percentage
-                                )
+    def download(self, s3_object, local_file):
+        try:
+            self.s3.download_file(self.bucket_name, s3_object, local_file)
+            print(f"下载成功: {s3_object} 到 {local_file}")
+        except Exception as e:
+            print(f"下载失败: {e}")
 
 if __name__ == '__main__':
-    pass
 
+    # 阿里云oss访问地址需要带bucket_name https://backup2222.oss-cn-shenzhen.aliyuncs.com
+    oss = OssHelper('ak', 'sk',
+                      'https://backup2222.oss-cn-shenzhen.aliyuncs.com','db-backup' )
+
+    oss = OssHelper('ak', 'sk',
+                      'https://oss.doamin.com','db-backup' )
+
+    # oss = OssHelper(ossConf.accessKey, ossConf.secretKey,
+    #                 ossConf.url, ossConf.bucket)
+
+    ossPath =    'local' + "/" + 'cat2.png'
+    oss.upload(ossPath, 'C:\\Users\\w\\Pictures\\cat.png')
+    pass
